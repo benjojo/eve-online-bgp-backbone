@@ -41,11 +41,12 @@ type system struct {
 }
 
 type link struct {
-	listen     bool
-	port       int
-	otherside  int
-	dstIP      string
-	internalIP int
+	useMyPrefix bool
+	theirIP     string
+	myPort      int
+	theirPort   int
+	internalIP  int
+	otherside   int
 }
 
 type hypervisor struct {
@@ -70,7 +71,7 @@ func main() {
 
 	// Load every system into the map
 	RAMSaved := 0
-	Tick := 0
+	Tick := 1
 	for _, SolarSystem := range NewEden.SolarSystems {
 		if SolarSystem.ID > 31000000 {
 			RAMSaved += 130
@@ -196,22 +197,27 @@ func main() {
 	for _, jump := range NewEden.Jumps {
 		SrcSystem := systems[jump.From]
 		DstSystem := systems[jump.To]
-		PortMap[DstSystem.IPAddress] += 2
+		PortMap[DstSystem.IPAddress]++
 		DstPort := PortMap[DstSystem.IPAddress]
+		PortMap[SrcSystem.IPAddress]++
+		SrcPort := PortMap[SrcSystem.IPAddress]
 
 		DstSystem.Links = append(DstSystem.Links, link{
-			listen:     true,
-			port:       DstPort,
-			otherside:  SrcSystem.ID,
-			internalIP: Tick,
+			theirIP:     SrcSystem.IPAddress,
+			internalIP:  Tick,
+			theirPort:   SrcPort,
+			myPort:      DstPort,
+			useMyPrefix: false,
+			otherside:   jump.From,
 		})
 
 		SrcSystem.Links = append(SrcSystem.Links, link{
-			listen:     false,
-			dstIP:      DstSystem.IPAddress,
-			port:       DstPort,
-			otherside:  DstSystem.ID,
-			internalIP: Tick + 1,
+			internalIP:  Tick + 1,
+			theirIP:     DstSystem.IPAddress,
+			theirPort:   DstPort,
+			myPort:      SrcPort,
+			useMyPrefix: true,
+			otherside:   jump.To,
 		})
 
 		systems[jump.From] = SrcSystem
@@ -231,49 +237,60 @@ func main() {
 		interfacesConfig := "auto lo\niface lo inet loopback\n\n"
 
 		for interfaceNumber, linkInfo := range sys.Links {
-			if linkInfo.listen {
-				// I need to look up the other sides prefix and linkNumber
-				othersystem := systems[linkInfo.otherside]
-				// linkAddress := ""
-				// for otherInterfaceNumber, v := range othersystem.Links {
-				// 	if !v.listen && v.dstIP == sys.IPAddress && v.port == linkInfo.port {
-				// 		linkAddress = fmt.Sprintf("%s", strings.Split(othersystem.Prefix, "/")[0])
-				// 	}
-				// }
-				interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s%x\n\tnetmask 127\n\n",
-					interfaceNumber, interfaceNumber, strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP)
+
+			if linkInfo.useMyPrefix {
+				// internalIP:  Tick + 1,
+				// useMyPrefix: true,
+
+				me := fmt.Sprintf("%s%x", strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP) //me
+				interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s\n\tnetmask 127\n\n",
+					interfaceNumber, interfaceNumber, me)
 
 			} else {
-				interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s%x\n\tnetmask 127\n\n",
-					interfaceNumber, interfaceNumber, strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP)
+				othersystem := systems[linkInfo.otherside]
+				// internalIP:  Tick,
+				// useMyPrefix: false,
+
+				me := fmt.Sprintf("%s%x", strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP) //me
+				interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s\n\tnetmask 127\n\n",
+					interfaceNumber, interfaceNumber, me)
+
 			}
+
+			// if !linkInfo.useMyPrefix {
+			// 	// I need to look up the other sides prefix and linkNumber
+			// 	othersystem := systems[linkInfo.otherside]
+			// 	// linkAddress := ""
+			// 	// for otherInterfaceNumber, v := range othersystem.Links {
+			// 	// 	if !v.listen && v.dstIP == sys.IPAddress && v.port == linkInfo.port {
+			// 	// 		linkAddress = fmt.Sprintf("%s", strings.Split(othersystem.Prefix, "/")[0])
+			// 	// 	}
+			// 	// }
+			// 	interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s%x\n\tnetmask 127\n\n",
+			// 		interfaceNumber, interfaceNumber, strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP)
+
+			// } else {
+			// 	interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s%x\n\tnetmask 127\n\n",
+			// 		interfaceNumber, interfaceNumber, strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP)
+			// }
 		}
 
 		// log.Print(interfacesConfig)
 		ioutil.WriteFile(dir+"interfaces", []byte(interfacesConfig), 0777)
 
-		qemuLine := `qemu-system-i386 -kernel bzImage -hda rootfs.ext2 -append "root=/dev/sda rw" -device VGA,vgamem_mb=2 -m 64`
+		qemuLine := fmt.Sprintf("cp base.ext2 %d.ext2\n", sys.ID)
+		qemuLine += fmt.Sprintf(`qemu-system-i386 -kernel bzImage -hda %d.ext2 -append "root=/dev/sda rw" -device VGA,vgamem_mb=2 -m 64`, sys.ID)
 		qemuLine += fmt.Sprintf(" -hdb fat:./%d/", sys.ID)
-		for interfaceNumber, linkInfo := range sys.Links {
-			if linkInfo.listen {
-				mac := quickMac()
-				// -netdev socket,id=n1,mcast=239.192.168.1:1102,localaddr=1.2.3.
-				// -net socket,vlan=0,udp=localhost:4444,localaddr=localhost:5555 \
+		for _, linkInfo := range sys.Links {
 
-				qemuLine += fmt.Sprintf(" -device e1000,netdev=eth%d,mac=52:54:00:%02x:%02x:%02x -netdev socket,id=eth%d,udp=%s:%d,localaddr=%s:%d",
-					interfaceNumber, mac[0], mac[1], mac[2], interfaceNumber, linkInfo.dstIP, linkInfo.port+1, systems[linkInfo.otherside].IPAddress, linkInfo.port)
+			mac := quickMac()
 
-				// qemuLine += fmt.Sprintf(" -device e1000,netdev=eth%d,mac=52:54:00:%02x:%02x:%02x -netdev socket,id=eth%d,listen=:%d",
-				// 	interfaceNumber, mac[0], mac[1], mac[2], interfaceNumber, linkInfo.port)
-			} else {
-				mac := quickMac()
+			qemuLine += fmt.Sprintf(" -device e1000,netdev=n%d,mac=52:54:00:%02x:%02x:%02x -netdev socket,id=n%d,udp=%s:%d,localaddr=%s:%d",
+				linkInfo.theirPort+linkInfo.myPort, mac[0], mac[1], mac[2], linkInfo.theirPort+linkInfo.myPort, linkInfo.theirIP, linkInfo.theirPort, sys.IPAddress, linkInfo.myPort)
 
-				qemuLine += fmt.Sprintf(" -device e1000,netdev=eth%d,mac=52:54:00:%02x:%02x:%02x -netdev socket,id=eth%d,udp=%s:%d,localaddr=%s:%d",
-					interfaceNumber, mac[0], mac[1], mac[2], interfaceNumber, linkInfo.dstIP, linkInfo.port, systems[linkInfo.otherside].IPAddress, linkInfo.port+1)
+			// qemuLine += fmt.Sprintf(" -device e1000,netdev=eth%d,mac=52:54:00:%02x:%02x:%02x -netdev socket,id=eth%d,connect=%s:%d",
+			// 	interfaceNumber, mac[0], mac[1], mac[2], interfaceNumber, linkInfo.dstIP, linkInfo.port)
 
-				// qemuLine += fmt.Sprintf(" -device e1000,netdev=eth%d,mac=52:54:00:%02x:%02x:%02x -netdev socket,id=eth%d,connect=%s:%d",
-				// 	interfaceNumber, mac[0], mac[1], mac[2], interfaceNumber, linkInfo.dstIP, linkInfo.port)
-			}
 		}
 
 		ioutil.WriteFile(dir+"qemu.sh", []byte(qemuLine), 0777)
@@ -292,47 +309,31 @@ func main() {
 
 		// Now BGP peers
 		for interfaceNumber, linkInfo := range sys.Links {
-			if linkInfo.listen {
+
+			if linkInfo.useMyPrefix {
 				othersystem := systems[linkInfo.otherside]
+				// internalIP:  Tick + 1,
+				// useMyPrefix: true,
 
 				birdconf += "\n\n"
-				birdconf += fmt.Sprintf("protocol bgp session%d {\n", interfaceNumber)
+				birdconf += fmt.Sprintf("#This session is UseMyPrefix\nprotocol bgp session%d {\n", interfaceNumber)
 				birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
-					strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, othersystem.ASN,
-					strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, sys.ASN)
-
-				birdconf += `
-	enable extended messages;
-	enable route refresh;
-
-	ipv6 {
-		import all;
-		export all;
-	};
-}
-`
-
-				// // I need to look up the other sides prefix and linkNumber
-				// othersystem := systems[linkInfo.otherside]
-				// linkAddress := ""
-				// for otherInterfaceNumber, v := range othersystem.Links {
-				// 	if !v.listen && v.dstIP == sys.IPAddress && v.port == linkInfo.port {
-				// 		linkAddress = fmt.Sprintf("%s%d", strings.Split(othersystem.Prefix, "/")[0], (otherInterfaceNumber*2)+1)
-				// 	}
-				// }
-				// interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s\n\tnetmask 127\n\n",
-				// 	interfaceNumber, interfaceNumber, linkAddress)
+					strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP-1, othersystem.ASN, // neigh
+					strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
 
 			} else {
 				othersystem := systems[linkInfo.otherside]
+				// internalIP:  Tick,
+				// useMyPrefix: false,
 
 				birdconf += "\n\n"
 				birdconf += fmt.Sprintf("protocol bgp session%d {\n", interfaceNumber)
 				birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
-					strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP+1, othersystem.ASN,
-					strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, sys.ASN)
+					strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, othersystem.ASN, // neigh
+					strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
+			}
 
-				birdconf += `
+			birdconf += `
 	enable extended messages;
 	enable route refresh;
 
@@ -342,10 +343,6 @@ func main() {
 	};
 }
 `
-
-				// interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s%d\n\tnetmask 127\n\n",
-				// 	interfaceNumber, interfaceNumber, strings.Split(sys.Prefix, "/")[0], interfaceNumber*2)
-			}
 		}
 		ioutil.WriteFile(dir+"bird.conf", []byte(birdconf), 0777)
 
