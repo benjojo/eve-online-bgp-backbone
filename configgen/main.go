@@ -279,7 +279,7 @@ func main() {
 		ioutil.WriteFile(dir+"interfaces", []byte(interfacesConfig), 0777)
 
 		qemuLine := fmt.Sprintf("cp base.ext2 %d.ext2\n", sys.ID)
-		qemuLine += fmt.Sprintf(`qemu-system-i386 -kernel bzImage -hda %d.ext2 -append "root=/dev/sda rw" -device VGA,vgamem_mb=2 -m 64`, sys.ID)
+		qemuLine += fmt.Sprintf(`qemu-system-i386 -kernel bzImage -hda %d.ext2 -nographic -serial mon:stdio -append "root=/dev/sda rw console=ttyS0" -device VGA,vgamem_mb=2 -m 64`, sys.ID)
 		qemuLine += fmt.Sprintf(" -hdb fat:./%d/", sys.ID)
 		for _, linkInfo := range sys.Links {
 
