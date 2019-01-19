@@ -130,27 +130,27 @@ func main() {
 
 	hypervisors := []hypervisor{
 
+		// hypervisor{
+		// 	IP:      "127.0.0.1",
+		// 	RAMLeft: 99999999,
+		// 	Systems: make([]int, 0),
+		// },
+
 		hypervisor{
-			IP:      "127.0.0.1",
-			RAMLeft: 99999999,
+			IP:      "147.75.81.189",
+			RAMLeft: 240000,
 			Systems: make([]int, 0),
 		},
-
-		// hypervisor{
-		// 	IP:      "1.1.1.1",
-		// 	RAMLeft: 240000,
-		// 	Systems: make([]int, 0),
-		// },
-		// hypervisor{
-		// 	IP:      "1.1.1.2",
-		// 	RAMLeft: 240000,
-		// 	Systems: make([]int, 0),
-		// },
-		// hypervisor{
-		// 	IP:      "1.1.1.3",
-		// 	RAMLeft: 240000,
-		// 	Systems: make([]int, 0),
-		// },
+		hypervisor{
+			IP:      "147.75.81.191",
+			RAMLeft: 240000,
+			Systems: make([]int, 0),
+		},
+		hypervisor{
+			IP:      "147.75.83.41",
+			RAMLeft: 240000,
+			Systems: make([]int, 0),
+		},
 	}
 
 	// Assign systems to hypervisors
@@ -279,7 +279,7 @@ func main() {
 		ioutil.WriteFile(dir+"interfaces", []byte(interfacesConfig), 0777)
 
 		qemuLine := fmt.Sprintf("cp base.ext2 %d.ext2\n", sys.ID)
-		qemuLine += fmt.Sprintf(`qemu-system-i386 -kernel bzImage -hda %d.ext2 -nographic -serial mon:stdio -append "root=/dev/sda rw console=ttyS0" -device VGA,vgamem_mb=2 -m 64`, sys.ID)
+		qemuLine += fmt.Sprintf(`qemu-system-i386 -kernel bzImage -hda %d.ext2 -nographic -enable-kvm -serial mon:stdio -append "root=/dev/sda rw console=ttyS0" -device VGA,vgamem_mb=2 -m 64`, sys.ID)
 		qemuLine += fmt.Sprintf(" -hdb fat:./%d/", sys.ID)
 		for _, linkInfo := range sys.Links {
 
