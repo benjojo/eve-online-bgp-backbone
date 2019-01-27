@@ -111,6 +111,8 @@ func MakeStationIfNotExists(in string, uni *universe, AlreadyExistsMap map[strin
 }
 
 func SaneName(in string) string {
+	in = strings.Trim(in, "&")
+
 	if strings.Contains(in, " ") {
 		bits := strings.Split(in, " ")
 		for k, v := range bits {
