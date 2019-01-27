@@ -40,7 +40,8 @@ func main() {
 		log.Fatalf("Failed to parse tldr.json %s", err.Error())
 	}
 
-	b, err := ioutil.ReadFile("../universe-pretty.json")
+	// b, err := ioutil.ReadFile("../universe-pretty.json")
+	b, err := ioutil.ReadFile("../tfl.json")
 	if err != nil {
 		log.Fatalf("Unable to read JSON data file, cannot build configs without this %s", err.Error())
 	}
@@ -120,7 +121,7 @@ func NamesPls(in universe) map[int]string {
 	o := make(map[int]string)
 	i := 1
 	for _, v := range in.SolarSystems {
-		o[i] = v.Name
+		o[v.ID] = v.Name
 		i++
 	}
 	return o

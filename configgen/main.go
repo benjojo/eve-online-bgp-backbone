@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -23,8 +24,9 @@ type universe struct {
 }
 
 type jump struct {
-	From int `json:"from"`
-	To   int `json:"to"`
+	From    int `json:"from"`
+	To      int `json:"to"`
+	Latency int `json:"latency"`
 }
 
 type system struct {
@@ -47,6 +49,7 @@ type link struct {
 	theirPort   int
 	internalIP  int
 	otherside   int
+	latency     int
 }
 
 type hypervisor struct {
@@ -56,7 +59,10 @@ type hypervisor struct {
 }
 
 func main() {
-	b, err := ioutil.ReadFile("./universe-pretty.json")
+	inputFN := flag.String("input", "./universe-pretty.json", "The json file you want to import")
+	iBGPEnabled := flag.Bool("ibgp", false, "Enabled iBGP instead of eBGP")
+	flag.Parse()
+	b, err := ioutil.ReadFile(*inputFN)
 	if err != nil {
 		log.Fatalf("Unable to read JSON data file, cannot build configs without this %s", err.Error())
 	}
@@ -137,17 +143,7 @@ func main() {
 		// },
 
 		hypervisor{
-			IP:      "147.75.81.189",
-			RAMLeft: 240000,
-			Systems: make([]int, 0),
-		},
-		hypervisor{
-			IP:      "147.75.81.191",
-			RAMLeft: 240000,
-			Systems: make([]int, 0),
-		},
-		hypervisor{
-			IP:      "147.75.83.41",
+			IP:      "147.75.106.51",
 			RAMLeft: 240000,
 			Systems: make([]int, 0),
 		},
@@ -209,6 +205,7 @@ func main() {
 			myPort:      DstPort,
 			useMyPrefix: false,
 			otherside:   jump.From,
+			latency:     jump.Latency,
 		})
 
 		SrcSystem.Links = append(SrcSystem.Links, link{
@@ -218,6 +215,7 @@ func main() {
 			myPort:      SrcPort,
 			useMyPrefix: true,
 			otherside:   jump.To,
+			latency:     jump.Latency,
 		})
 
 		systems[jump.From] = SrcSystem
@@ -228,6 +226,8 @@ func main() {
 	for _, v := range systems {
 		log.Printf("%#v", v)
 	}
+
+	hostsFile := make(map[string]string)
 
 	// Produce config for all systems
 	for _, sys := range systems {
@@ -246,6 +246,8 @@ func main() {
 				interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s\n\tnetmask 127\n\n",
 					interfaceNumber, interfaceNumber, me)
 
+				hostsFile[me] = sys.Name
+
 			} else {
 				othersystem := systems[linkInfo.otherside]
 				// internalIP:  Tick,
@@ -254,6 +256,8 @@ func main() {
 				me := fmt.Sprintf("%s%x", strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP) //me
 				interfacesConfig += fmt.Sprintf("auto eth%d\niface eth%d inet6 static\n\taddress %s\n\tnetmask 127\n\n",
 					interfaceNumber, interfaceNumber, me)
+
+				hostsFile[me] = sys.Name
 
 			}
 
@@ -304,7 +308,12 @@ func main() {
 		RID := quickMac()
 		birdconf += fmt.Sprintf("\nrouter id 1.%d.%d.%d;\n", RID[0], RID[1], RID[2])
 		birdconf += "protocol device {\n}\n\nprotocol static announcements6{\n\tipv6;\n"
-		birdconf += "\troute " + sys.Prefix + " unreachable;\n}\n\n"
+		if !*iBGPEnabled {
+
+			birdconf += "\troute " + sys.Prefix + " unreachable;\n}\n\n"
+		} else {
+			birdconf += "\troute " + sys.Prefix + " reject {bgp_med = 0;};\n}\n\n"
+		}
 		birdconf += "protocol kernel {\n\tscan time 25;\n\tipv6 {\n\t\timport none;\n\t\texport all;\n\t};\n}"
 
 		// Now BGP peers
@@ -317,9 +326,16 @@ func main() {
 
 				birdconf += "\n\n"
 				birdconf += fmt.Sprintf("#This session is UseMyPrefix\nprotocol bgp session%d {\n", interfaceNumber)
-				birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
-					strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP-1, othersystem.ASN, // neigh
-					strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
+				if !*iBGPEnabled {
+					birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
+						strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP-1, othersystem.ASN, // neigh
+						strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
+				} else {
+					birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
+						strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP-1, 1337, // neigh
+						strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, 1337) // e
+
+				}
 
 			} else {
 				othersystem := systems[linkInfo.otherside]
@@ -328,12 +344,20 @@ func main() {
 
 				birdconf += "\n\n"
 				birdconf += fmt.Sprintf("protocol bgp session%d {\n", interfaceNumber)
-				birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
-					strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, othersystem.ASN, // neigh
-					strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
+				if !*iBGPEnabled {
+					birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
+						strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, othersystem.ASN, // neigh
+						strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
+				} else {
+					birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
+						strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, 1337, // neigh
+						strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, 1337) // me
+				}
 			}
 
-			birdconf += `
+			if !*iBGPEnabled {
+
+				birdconf += `
 	enable extended messages;
 	enable route refresh;
 
@@ -343,9 +367,43 @@ func main() {
 	};
 }
 `
+			} else {
+				birdconf += fmt.Sprintf(`
+	enable extended messages;
+	enable route refresh;
+	rr client;
+	direct; 
+	
+	ipv6 {
+		
+		next hop self;
+		import filter{
+			bgp_med = bgp_med + %d;
+			accept;
+		};
+		export all;
+	};
+}
+`, linkInfo.latency)
+			}
 		}
 		ioutil.WriteFile(dir+"bird.conf", []byte(birdconf), 0777)
+	}
 
+	hostfileBin := `127.0.0.1	localhost
+::1     ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+`
+	for addr, hostname := range hostsFile {
+		hostfileBin += fmt.Sprintf("%s\t%s\n", addr, hostname)
+	}
+
+	for _, sys := range systems {
+		dir := fmt.Sprintf("./%s/%d/", sys.IPAddress, sys.ID)
+		ioutil.WriteFile(dir+"hosts", []byte(hostfileBin), 0777)
 	}
 
 }
