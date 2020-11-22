@@ -61,6 +61,7 @@ type hypervisor struct {
 func main() {
 	inputFN := flag.String("input", "./universe-pretty.json", "The json file you want to import")
 	iBGPEnabled := flag.Bool("ibgp", false, "Enabled iBGP instead of eBGP")
+	ospfEnabled := flag.Bool("ospf", false, "Enabled iBGP instead of eBGP")
 	flag.Parse()
 	b, err := ioutil.ReadFile(*inputFN)
 	if err != nil {
@@ -143,7 +144,7 @@ func main() {
 		// },
 
 		hypervisor{
-			IP:      "147.75.106.51",
+			IP:      "192.168.2.104",
 			RAMLeft: 240000,
 			Systems: make([]int, 0),
 		},
@@ -282,9 +283,9 @@ func main() {
 		// log.Print(interfacesConfig)
 		ioutil.WriteFile(dir+"interfaces", []byte(interfacesConfig), 0777)
 
-		qemuLine := fmt.Sprintf("cp base.ext2 %d.ext2\n", sys.ID)
+		qemuLine := fmt.Sprintf("cp ../rootfs.ext2 %d.ext2\n", sys.ID)
 		qemuLine += fmt.Sprintf(`qemu-system-i386 -kernel bzImage -hda %d.ext2 -nographic -enable-kvm -serial mon:stdio -append "root=/dev/sda rw console=ttyS0" -device VGA,vgamem_mb=2 -m 64`, sys.ID)
-		qemuLine += fmt.Sprintf(" -hdb fat:./%d/", sys.ID)
+		qemuLine += fmt.Sprintf(" -drive format=raw,file=fat:rw:./%d/", sys.ID)
 		for _, linkInfo := range sys.Links {
 
 			mac := quickMac()
@@ -309,55 +310,55 @@ func main() {
 		birdconf += fmt.Sprintf("\nrouter id 1.%d.%d.%d;\n", RID[0], RID[1], RID[2])
 		birdconf += "protocol device {\n}\n\nprotocol static announcements6{\n\tipv6;\n"
 		if !*iBGPEnabled {
-
 			birdconf += "\troute " + sys.Prefix + " unreachable;\n}\n\n"
 		} else {
 			birdconf += "\troute " + sys.Prefix + " reject {bgp_med = 0;};\n}\n\n"
 		}
 		birdconf += "protocol kernel {\n\tscan time 25;\n\tipv6 {\n\t\timport none;\n\t\texport all;\n\t};\n}"
 
-		// Now BGP peers
-		for interfaceNumber, linkInfo := range sys.Links {
+		if !*ospfEnabled {
+			// Now BGP peers
+			for interfaceNumber, linkInfo := range sys.Links {
 
-			if linkInfo.useMyPrefix {
-				othersystem := systems[linkInfo.otherside]
-				// internalIP:  Tick + 1,
-				// useMyPrefix: true,
+				if linkInfo.useMyPrefix {
+					othersystem := systems[linkInfo.otherside]
+					// internalIP:  Tick + 1,
+					// useMyPrefix: true,
 
-				birdconf += "\n\n"
-				birdconf += fmt.Sprintf("#This session is UseMyPrefix\nprotocol bgp session%d {\n", interfaceNumber)
-				if !*iBGPEnabled {
-					birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
-						strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP-1, othersystem.ASN, // neigh
-						strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
+					birdconf += "\n\n"
+					birdconf += fmt.Sprintf("#This session is UseMyPrefix\nprotocol bgp session%d {\n", interfaceNumber)
+					if !*iBGPEnabled {
+						birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
+							strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP-1, othersystem.ASN, // neigh
+							strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
+					} else {
+						birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
+							strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP-1, 1337, // neigh
+							strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, 1337) // e
+
+					}
+
 				} else {
-					birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
-						strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP-1, 1337, // neigh
-						strings.Split(sys.Prefix, "/")[0], linkInfo.internalIP, 1337) // e
+					othersystem := systems[linkInfo.otherside]
+					// internalIP:  Tick,
+					// useMyPrefix: false,
 
+					birdconf += "\n\n"
+					birdconf += fmt.Sprintf("protocol bgp session%d {\n", interfaceNumber)
+					if !*iBGPEnabled {
+						birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
+							strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, othersystem.ASN, // neigh
+							strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
+					} else {
+						birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
+							strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, 1337, // neigh
+							strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, 1337) // me
+					}
 				}
 
-			} else {
-				othersystem := systems[linkInfo.otherside]
-				// internalIP:  Tick,
-				// useMyPrefix: false,
-
-				birdconf += "\n\n"
-				birdconf += fmt.Sprintf("protocol bgp session%d {\n", interfaceNumber)
 				if !*iBGPEnabled {
-					birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
-						strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, othersystem.ASN, // neigh
-						strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, sys.ASN) // me
-				} else {
-					birdconf += fmt.Sprintf("\tneighbor %s%x as %d;\n\tsource address %s%x;\n\tlocal as %d;\n\t",
-						strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP+1, 1337, // neigh
-						strings.Split(othersystem.Prefix, "/")[0], linkInfo.internalIP, 1337) // me
-				}
-			}
 
-			if !*iBGPEnabled {
-
-				birdconf += `
+					birdconf += `
 	enable extended messages;
 	enable route refresh;
 
@@ -367,8 +368,8 @@ func main() {
 	};
 }
 `
-			} else {
-				birdconf += fmt.Sprintf(`
+				} else {
+					birdconf += fmt.Sprintf(`
 	enable extended messages;
 	enable route refresh;
 	rr client;
@@ -385,9 +386,31 @@ func main() {
 	};
 }
 `, linkInfo.latency)
+				}
 			}
+		} else {
+			birdconf += `protocol ospf v3 internal6 {  
+	ipv6 {
+			export where (source = RTS_STATIC) || (source = RTS_OSPF);
+	};
+
+	area 0.0.0.0 {
+			interface "*" {
+					hello 10;
+					retransmit 6;
+					cost 1; 
+					transmit delay 5;
+					dead count 5;
+					wait 50;
+					type pointopoint;
+			};
+
+	};
+}
+`
 		}
 		ioutil.WriteFile(dir+"bird.conf", []byte(birdconf), 0777)
+
 	}
 
 	hostfileBin := `127.0.0.1	localhost
